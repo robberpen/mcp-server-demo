@@ -1,20 +1,14 @@
 #!/usr/bin/env python
+
+# uv run python ./yocto_client_env.py
 import subprocess
 import os,time
 from pathlib import Path
-# create a mcp server class to run bitbake commands
-# this class will provided async @tool to run bitbake commands and return the results
-# it will also handle the environment variables and paths
 from mcp.server.fastmcp.prompts import base
 from mcp.server.fastmcp import Context, FastMCP
 import asyncio
 import os
-import shlex
 mcp = FastMCP(name="Yocto Bitbake MCP", description="MCP for running Yocto Bitbake commands", version="0.1.0")
-with open("/tmp/mcp_yocto.log", "a") as logfile:
-    print(f"Starting MCP server at {time.strftime('%Y-%m-%d %H:%M:%S')} env: {os.environ.get('PATH')}", file=logfile, flush=True)
-#@mcp.tool(name="yocto_build_image", description="Build Yocto image using bitbake")
-#@base
 @mcp.tool(name="yocto_build_image", description="Build Yocto image using bitbake")
 async def yocto_build_image(ctx: Context, recipe: str = "sera-demo") -> str:
     """Asynchronously run BitBake to build a Yocto recipe.
@@ -33,48 +27,94 @@ async def yocto_build_image(ctx: Context, recipe: str = "sera-demo") -> str:
         "python3",
         bb_exe,
         "-v",
-        shlex.quote(recipe),  # basic shell‑escape for safety
+        recipe,
         "-c",
         "install",
     ]
 
-    # --- launch subprocess asynchronously ----------------------------------
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    await ctx.report_progress(progress=0.0, message="Build started")
 
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
+    start_ts = time.time()
+    last_report = start_ts
+    try:
+        while True:
+            raw_line = await proc.stdout.readline()
+            await ctx.debug(f"PTM processed...{time.time():.3f}")
+            if not raw_line:
+                break
+            line = raw_line.decode("utf-8", errors="replace").rstrip()
+            stdout_lines.append(line)
+            if len(stdout_lines) % 3 == 0:
+                await ctx.report_progress(
+                    progress=0.5, message=f"{len(stdout_lines)} lines processed..."
+                )
+                await ctx.debug(f"PTM processed...len{len(stdout_lines)}, {time.time():.3f}")
+            now = time.time()
+            if now - last_report > 60:
+                elapsed = int(now - start_ts)
+                await ctx.report_progress(
+                    progress=0.5, message=f"Still building after {elapsed}s..."
+                )
+                await ctx.debug(f"PTM processed...Still building after, {elapsed:.3f}")
+                last_report = now
+        stderr_tail = await proc.stderr.read()
+        if stderr_tail:
+            stderr_str = stderr_tail.decode("utf-8", errors="replace")
+            stderr_lines.extend(stderr_str.splitlines())
+        await proc.wait()
+    except asyncio.CancelledError:
+        proc.kill()
+        await proc.wait()
+        raise
 
-    # Read stdout as it comes in; you could parse for real progress tokens here
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        stdout_lines.append(line.rstrip())
-        if len(stdout_lines) % 100 == 0:
-            await ctx.report_progress(progress=None, message=f"{len(stdout_lines)} lines processed …")
-
-    # Drain remaining stderr (if any) and wait for completion
-    stderr_tail = await proc.stderr.read()
-    if stderr_tail:
-        stderr_lines.extend(stderr_tail.splitlines())
-    await proc.wait()
-
-    # --- final result -------------------------------------------------------
+    await ctx.report_progress(progress=1.0, message="Build process complete")
     if proc.returncode == 0:
         return "\n".join(stdout_lines[-20:]) or "Build completed successfully (no output)"
-    else:
-        return "\n".join(stderr_lines[-100:]) or f"BitBake exited with code {proc.returncode}"
+    return "\n".join(stderr_lines[-100:]) or f"BitBake exited with code {proc.returncode}"
 
 
 
 @mcp.tool(name="get_recipe_build_log_dir", description="Build Yocto recipe using bitbake")
-def get_recipe_build_log_dir(ctx: Context, recipe: str) -> str:
-    ctx.debug(f'env: {os.environ.get("PYTHONPATH")}')
-    return f'env: {os.environ.get("BBPATH")}'
+async def get_recipe_build_log_dir(ctx: Context, recipe: str) -> str:
+    if not recipe:
+        raise ValueError("Recipe name must be provided.")
+    cmd = ["bitbake", "-e", recipe]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        out_bytes, _ = await proc.communicate()
+    except asyncio.CancelledError:
+        proc.kill()
+        await proc.wait()
+        raise
+    stdout = out_bytes.decode("utf-8", errors="replace")
+    for line in stdout.splitlines():
+        if line.startswith("WORKDIR="):
+            workdir = line.split("=", 1)[1].strip()
+            break
+    else:
+        raise ValueError(f"Could not determine WORKDIR for recipe: {recipe}")
+    
+    workdir = workdir.strip('"')
+    if not workdir:
+        raise ValueError("WORKDIR is empty or not set correctly.")
+    if not os.path.isdir(workdir):
+        raise ValueError(f"WORKDIR does not exist: {workdir}")
+    build_log_dir = Path(workdir) / "temp" / "log.do_compile"
+
+    if not build_log_dir.exists():
+        raise ValueError(f"Build log directory does not exist: {build_log_dir}")
+    return str(build_log_dir)
 
 class mcp_bitbake:
     def __init__(self, bbdir: str):
@@ -88,59 +128,61 @@ class mcp_bitbake:
     @staticmethod
     async def yocto_build_image(ctx: Context) -> str:
         '''
-        Execute "bitbake rity-demo-image" and check if the build is successful.
-        Returns "Build completed successfully" if successful,
-        otherwise returns the last 100 lines of stderr.
+        Execute "bitbake sera-demo" and return the last lines of output.
         '''
-        #yyreturn "Build completed successfully"
-        await ctx.debug(f' callback env: {os.environ.get("BBPATH")}')
+        await ctx.debug(f'callback env: {os.environ.get("BBPATH")}')
+        cmd = [
+            "python3",
+            "/sera/share2/sera/SMARC/G700/src/poky/bitbake/bin/bitbake",
+            "-v",
+            "sera-demo",
+            "-c",
+            "install",
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         try:
-            #["bitbake", "sera-demo"],
-            #ctx.debug
-            result = subprocess.run(
-                ["python3", "/sera/share2/sera/SMARC/G700/src/poky/bitbake/bin/bitbake", "-v", "sera-demo", "-c", "install"],
-                check=False,
-                capture_output=True,
-                text=True
-            )
-            exit_code = result.returncode
-            stdout = result.stdout
-            stderr = result.stderr
+            out_bytes, err_bytes = await proc.communicate()
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
+        stdout = out_bytes.decode("utf-8", errors="replace")
+        stderr = err_bytes.decode("utf-8", errors="replace")
+        if proc.returncode == 0:
+            return "\n".join(stdout.splitlines(keepends=True)[-5:])
+        return "\n".join(stderr.splitlines()[-100:])
 
-            if exit_code == 0:
-                return "\n".join(stdout.splitlines(keepends=True)[-5:])
-                #return f"Build completed successfully\n".join(stdout.splitlines()[-100:])
-            else:
-                #return "NGNG"
-                return "\n".join(stdout.splitlines()[-100:])
-        except subprocess.CalledProcessError as e:
-            return f"bitbake exception {e}"
-            #return "\n".join(e.stderr.splitlines()[-100:])
-        return "Thanks"
-
-    def get_recipe_build_log_dir(self, recipe: str) -> str:
+    async def get_recipe_build_log_dir(self, recipe: str) -> str:
         '''
-        Get the build log directory for a given recipe.
+        Determine WORKDIR via 'bitbake -e' and return the log.do_compile path.
         '''
         if not recipe:
             raise ValueError("Recipe name must be provided.")
         if self.bbdir is None:
             raise ValueError("BBPATH environment variable is not set.")
-        # Assuming the build log directory is structured as follows:
-        # /path/to/build/logs/<recipe>
-        # use subprocess run  bitbake -e <recipe> | grep ^WORKDIR=
+        cmd = ["bitbake", "-e", recipe]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
         try:
-            result = subprocess.run(
-                ["bitbake", "-e", recipe],
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            workdir_line = next(line for line in result.stdout.splitlines() if line.startswith("WORKDIR="))
-            workdir = workdir_line.split("=", 1)[1].strip()
-        except (subprocess.CalledProcessError, StopIteration):
-            raise ValueError(f"Could not determine WORKDIR for recipe: {recipe}")    
-        # check if the build log directory exists
+            out_bytes, _ = await proc.communicate()
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
+        stdout = out_bytes.decode("utf-8", errors="replace")
+        for line in stdout.splitlines():
+            if line.startswith("WORKDIR="):
+                workdir = line.split("=", 1)[1].strip()
+                break
+        else:
+            raise ValueError(f"Could not determine WORKDIR for recipe: {recipe}")
         build_log_dir = Path(workdir) / "temp" / "log.do_compile"
         if not build_log_dir.exists():
             raise ValueError(f"Build log directory does not exist: {build_log_dir}")
