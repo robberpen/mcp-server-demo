@@ -8,7 +8,8 @@ from mcp.server.fastmcp.prompts import base
 from mcp.server.fastmcp import Context, FastMCP
 import asyncio
 import os
-mcp = FastMCP(name="Yocto Bitbake MCP", description="MCP for running Yocto Bitbake commands", version="0.1.0")
+#mcp = FastMCP(name="Yocto Bitbake MCP", description="MCP for running Yocto Bitbake commands", version="0.1.0")
+mcp = FastMCP(name="Yocto Bitbake MCP")
 @mcp.tool(name="yocto_build_image", description="Build Yocto image using bitbake")
 async def yocto_build_image(ctx: Context, recipe: str = "sera-demo") -> str:
     """Asynchronously run BitBake to build a Yocto recipe.
