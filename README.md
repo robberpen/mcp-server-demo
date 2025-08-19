@@ -1,3 +1,7 @@
+
+Init project
+uv sync
+
 > pip3 install uv
 > export PATH=$PATH:$HOME/.local/bin
 
