@@ -10,13 +10,18 @@ import asyncio
 import os
 #mcp = FastMCP(name="Yocto Bitbake MCP", description="MCP for running Yocto Bitbake commands", version="0.1.0")
 mcp = FastMCP(name="Yocto Bitbake MCP")
-@mcp.tool(name="yocto_build_image", description="Build Yocto image using bitbake")
-async def yocto_build_image(ctx: Context, recipe: str = "sera-demo") -> str:
+@mcp.tool(name="run_bitbake", description="Build Yocto recipes by bitbake")
+async def run_bitbake(ctx: Context, recipe: str = "sera-demo") -> str:
     """Asynchronously run BitBake to build a Yocto recipe.
-
     * Streams environment info and progress via ``ctx.debug`` / ``ctx.report_progress``.
+    * param:
+        recipe: name of recipe to build
     * Returns the last 20 lines of *stdout* on success, or the last 100 lines of
       *stderr* on failure.
+
+    for example - to build recipe "sera-demo" is to
+      call tool run_bitbake(..., "sera-demo")
+
     """
 
     # --- pre‑flight ---------------------------------------------------------
@@ -117,77 +122,6 @@ async def get_recipe_build_log_dir(ctx: Context, recipe: str) -> str:
         raise ValueError(f"Build log directory does not exist: {build_log_dir}")
     return str(build_log_dir)
 
-class mcp_bitbake:
-    def __init__(self, bbdir: str):
-        if bbdir is None:
-            self.bbdir = os.environ.get('BBPATH')
-        else:
-            self.bbdir = bbdir
-        if self.bbdir is None:
-            raise ValueError("BBPATH environment variable is not set and no directory provided.")
-
-    @staticmethod
-    async def yocto_build_image(ctx: Context) -> str:
-        '''
-        Execute "bitbake sera-demo" and return the last lines of output.
-        '''
-        await ctx.debug(f'callback env: {os.environ.get("BBPATH")}')
-        cmd = [
-            "python3",
-            "/sera/share2/sera/SMARC/G700/src/poky/bitbake/bin/bitbake",
-            "-v",
-            "sera-demo",
-            "-c",
-            "install",
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            out_bytes, err_bytes = await proc.communicate()
-        except asyncio.CancelledError:
-            proc.kill()
-            await proc.wait()
-            raise
-        stdout = out_bytes.decode("utf-8", errors="replace")
-        stderr = err_bytes.decode("utf-8", errors="replace")
-        if proc.returncode == 0:
-            return "\n".join(stdout.splitlines(keepends=True)[-5:])
-        return "\n".join(stderr.splitlines()[-100:])
-
-    async def get_recipe_build_log_dir(self, recipe: str) -> str:
-        '''
-        Determine WORKDIR via 'bitbake -e' and return the log.do_compile path.
-        '''
-        if not recipe:
-            raise ValueError("Recipe name must be provided.")
-        if self.bbdir is None:
-            raise ValueError("BBPATH environment variable is not set.")
-        cmd = ["bitbake", "-e", recipe]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            out_bytes, _ = await proc.communicate()
-        except asyncio.CancelledError:
-            proc.kill()
-            await proc.wait()
-            raise
-        stdout = out_bytes.decode("utf-8", errors="replace")
-        for line in stdout.splitlines():
-            if line.startswith("WORKDIR="):
-                workdir = line.split("=", 1)[1].strip()
-                break
-        else:
-            raise ValueError(f"Could not determine WORKDIR for recipe: {recipe}")
-        build_log_dir = Path(workdir) / "temp" / "log.do_compile"
-        if not build_log_dir.exists():
-            raise ValueError(f"Build log directory does not exist: {build_log_dir}")
-        return str(build_log_dir)
 
 
 if __name__ == "__main__":

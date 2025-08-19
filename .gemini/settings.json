@@ -1,0 +1,41 @@
+{
+  "contextFileName": [
+    ".github/copilot-instructions.md",
+    "GEMINI.md"
+  ],
+  "preferredEditor": "vim",
+  "theme": "ANSI Light",
+  "mcpServers": {
+    "github": {
+      "command": "/sera/share2/AI/venv/github-mcp-server.git/cmd/github-mcp-server/github-mcp-server",
+      "args": [
+        "stdio"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_PERSONAL_ACCESS_TOKEN"
+      },
+      "trust": true
+    },
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "trust": true
+    },
+    "yocto": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/sera/share2/AI/venv/mcp-server",
+	"run",
+	"python3",
+        "yocto_server.py"
+      ],
+      "trust": true
+    }
+  }
+}

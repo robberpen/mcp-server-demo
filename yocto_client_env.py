@@ -25,6 +25,11 @@ def parse_args():
         action="store_true",
         help="List available MCP tools and exit",
     )
+    parser.add_argument(
+        "--bitbake",
+        type=str,
+        help="Name of the recipe to build",
+    )
     return parser.parse_args()
 
 
@@ -93,7 +98,10 @@ async def run_client(args):
                 print(res)
 
         #res = await client.call_tool("yocto_build_image", {"recipe": "kernel"})
-        res = await client.call_tool("yocto_build_image", {"recipe": "sera-demo"})
+        recipe = "sera-demo"
+        if args.bitbake:
+            recipe = args.bitbake
+        res = await client.call_tool("run_bitbake", {"recipe": recipe})
         print_result(res)
         #res = await client.call_tool("get_recipe_build_log_dir", {"recipe": "sera-demo"})
         #print_result(res)
